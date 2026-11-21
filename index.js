@@ -52,6 +52,29 @@ if (fs.existsSync('./database.json')) {
     db = JSON.parse(fs.readFileSync('./database.json', 'utf8'));
 }
 
+// تنظيف لمرة واحدة: النسخة العامة القديمة كانت تسبب نسخ سيرفر قديم لسيرفر ثاني
+let dbCleaned = false;
+if (!db.guildBackups || typeof db.guildBackups !== 'object') {
+    db.guildBackups = {};
+    dbCleaned = true;
+}
+for (const [gid, snap] of Object.entries(db.guildBackups)) {
+    if (!snap || typeof snap !== 'object' || String(snap.guildId || gid) !== String(gid)) {
+        delete db.guildBackups[gid];
+        dbCleaned = true;
+        continue;
+    }
+    if (!snap.guildId) { snap.guildId = String(gid); dbCleaned = true; }
+}
+if (!db.backup || typeof db.backup !== 'object' || db.backup.guildId) {
+    db.backup = { roles: [], channels: [], members: [], settings: {}, guildId: '' };
+    dbCleaned = true;
+}
+if (dbCleaned) {
+    try { saveDB(); console.log('[db] تم تنظيف النسخ القديمة وتثبيت كل نسخة بسيرفرها'); }
+    catch (err) { console.error('[db] تنظيف النسخ:', err.message); }
+}
+
 // تحميل الأوامر
 const commandFiles = fs.readdirSync('./commands').filter(file => file.endsWith('.js'));
 for (const file of commandFiles) {
