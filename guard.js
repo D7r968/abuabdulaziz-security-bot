@@ -104,6 +104,28 @@ async function alert(client, title, description, color = '#FF0000') {
   } catch (err) {
     console.error('[guard] alert failed:', err.message);
   }
+
+  // إرسال الحدث للوحة التحكم عشان يظهر في سجل الأحداث
+  try {
+    const base = String(process.env.DASHBOARD_URL || '').trim().replace(/\/+$/, '');
+    if (base) {
+      fetch(`${base}/api/log`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-log-token': String(process.env.DASHBOARD_LOG_TOKEN || '').trim()
+        },
+        body: JSON.stringify({
+          bot: 'security',
+          type: 'alert',
+          title,
+          description,
+          color
+        }),
+        signal: AbortSignal.timeout(6000)
+      }).catch(() => {});
+    }
+  } catch { /* تجاهل */ }
 }
 
 // ─────────────────────────────────────────────
