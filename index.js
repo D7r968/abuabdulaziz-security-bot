@@ -170,25 +170,125 @@ function autoBackup() {
 }
 
 
-// سيرفر فحص للاستضافة (Render يرسل PORT تلقائياً)
+// ─────────────────────────────────────────────
+// سيرفر HTTP: فحص صحة + تحكم بالسيرفر من الموقع
+// ─────────────────────────────────────────────
 let loginState = 'starting';
 let loginError = '';
+
+const CONTROL_TOKEN = String(process.env.DASHBOARD_LOG_TOKEN || 'change-me');
+
+function jsonResponse(res, status, payload) {
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+  res.end(JSON.stringify(payload));
+}
+
+function readJsonBody(req) {
+  return new Promise((resolve) => {
+    let raw = '';
+    req.on('data', (chunk) => {
+      raw += chunk;
+      if (raw.length > 200000) req.destroy();
+    });
+    req.on('end', () => {
+      try { resolve(raw ? JSON.parse(raw) : {}); } catch { resolve({}); }
+    });
+  });
+}
+
+function authorized(req) {
+  return String(req.headers['x-control-token'] || '') === CONTROL_TOKEN;
+}
+
+async function guildsForUser(userId) {
+  const guilds = [];
+  for (const guild of client.guilds.cache.values()) {
+    let isAdmin = guild.ownerId === userId;
+    if (!isAdmin && userId) {
+      const member = await guild.members.fetch(userId).catch(() => null);
+      isAdmin = !!member && member.permissions.has(PermissionFlagsBits.Administrator);
+    }
+    if (!isAdmin) continue;
+    guilds.push({
+      id: guild.id,
+      name: guild.name,
+      icon: guild.iconURL({ size: 128 }) || null,
+      owner: guild.ownerId === userId,
+      botPresent: true,
+      memberCount: guild.memberCount
+    });
+  }
+  return guilds;
+}
+
 if (process.env.PORT) {
   const port = Number(process.env.PORT) || 3000;
   http
-    .createServer((req, res) => {
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(
-        JSON.stringify({
-          status: 'ok',
-          bot: client.user?.tag || 'starting',
-          login: loginState,
-          loginError,
-          uptimeSeconds: Math.floor(process.uptime())
-        })
-      );
+    .createServer(async (req, res) => {
+      try {
+        const url = new URL(req.url || '/', 'http://localhost');
+        const path = url.pathname.replace(/\/+$/, '') || '/';
+
+        if (path === '/') {
+          return jsonResponse(res, 200, {
+            status: 'ok',
+            bot: client.user?.tag || 'starting',
+            login: loginState,
+            loginError,
+            uptimeSeconds: Math.floor(process.uptime()),
+            guilds: client.guilds.cache.size
+          });
+        }
+
+        if (!authorized(req)) return jsonResponse(res, 401, { ok: false, error: 'unauthorized' });
+
+        if (path === '/control/guilds') {
+          const userId = String(url.searchParams.get('userId') || '').replace(/\D/g, '');
+          if (!/^\d{15,25}$/.test(userId)) return jsonResponse(res, 400, { ok: false, guilds: [] });
+          return jsonResponse(res, 200, { ok: true, guilds: await guildsForUser(userId) });
+        }
+
+        const guildId = String(url.searchParams.get('guild') || '').replace(/\D/g, '');
+        if (!/^\d{15,25}$/.test(guildId)) {
+          return jsonResponse(res, 400, { ok: false, error: 'invalid guild id' });
+        }
+        const guild = client.guilds.cache.get(guildId);
+        if (!guild) return jsonResponse(res, 404, { ok: false, error: 'bot is not in this server' });
+
+        if (path === '/control/backup' && req.method === 'POST') {
+          await readJsonBody(req);
+          const saved = await guard.backupNow(guild, db, saveDB);
+          const snap = (db.guildBackups && db.guildBackups[guildId]) || {};
+          return jsonResponse(res, saved ? 200 : 500, {
+            ok: !!saved,
+            server: guild.name,
+            roles: (snap.roles || []).length,
+            channels: (snap.channels || []).length,
+            members: (snap.members || []).length,
+            emojis: (snap.emojis || []).length
+          });
+        }
+
+        if (path === '/control/restore' && req.method === 'POST') {
+          await readJsonBody(req);
+          const restored = await guard.restoreAll(guild, db, saveDB);
+          return jsonResponse(res, 200, {
+            ok: true,
+            server: guild.name,
+            roles: (restored.roles || []).length,
+            channels: (restored.channels || []).length,
+            emojis: (restored.emojis || []).length,
+            detail: restored
+          });
+        }
+
+        return jsonResponse(res, 404, { ok: false, error: 'not found' });
+      } catch (err) {
+        console.error('[http]', err.message);
+        return jsonResponse(res, 500, { ok: false, error: err.message });
+      }
     })
-    .listen(port, '0.0.0.0', () => console.log('[i] منفذ الفحص شغال على ' + port));
+    .listen(port, '0.0.0.0', () => console.log('[i] منفذ الفحص والتحكم شغال على ' + port));
 }
 
 // self-ping داخلي كل 5 دقائق عشان Render ما يرقد
