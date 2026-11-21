@@ -7,10 +7,16 @@ function settings() {
   return config.instantResponse || {};
 }
 
-// guildId فاضي في الإعدادات → نستخدم أول سيرفر البوت فيه عشان النسخ الاحتياطي يشتغل
+// guildId فاضي في الإعدادات → نستخدم كل السيرفرات اللي البوت فيها
+function getTargetGuilds(client) {
+  if (!client || !client.guilds) return [];
+  const configured = config.guildId && client.guilds.cache.get(config.guildId);
+  if (configured) return [configured];
+  return Array.from(client.guilds.cache.values());
+}
+
 function getTargetGuild(client) {
-  if (!client || !client.guilds) return null;
-  return client.guilds.cache.get(config.guildId) || client.guilds.cache.first() || null;
+  return getTargetGuilds(client)[0] || null;
 }
 
 // ─────────────────────────────────────────────
@@ -23,6 +29,59 @@ function isProtectedUser(userId, guild, db) {
   if (db && Array.isArray(db.whitelist) && db.whitelist.includes(userId)) return true;
   if (db && Array.isArray(db.protectAllowed) && db.protectAllowed.includes(userId)) return true;
   return false;
+}
+
+// ─────────────────────────────────────────────
+// تخزين الصلاحيات بشكل دائم عبر رول في ديسكورد
+// (لأن database.json على Render يُمحى عند كل إعادة تشغيل)
+// ─────────────────────────────────────────────
+const PROTECT_ROLE_NAME = '🛡️ PROTECTED';
+
+async function getOrCreateProtectRole(guild) {
+  let role = guild.roles.cache.find((r) => r.name === PROTECT_ROLE_NAME);
+  if (role) return role;
+  try {
+    role = await guild.roles.create({
+      name: PROTECT_ROLE_NAME,
+      color: '#00BFFF',
+      reason: 'تخزين صلاحيات الحماية بشكل دائم'
+    });
+    return role;
+  } catch (err) {
+    console.error('[guard] create protect role:', err.message);
+    return null;
+  }
+}
+
+async function syncProtectAllowed(client, db, saveDB) {
+  if (!Array.isArray(db.protectAllowed)) db.protectAllowed = [];
+  const ids = new Set(db.protectAllowed);
+  for (const guild of getTargetGuilds(client)) {
+    const role = await getOrCreateProtectRole(guild);
+    if (!role) continue;
+    for (const member of role.members.values()) ids.add(member.id);
+  }
+  db.protectAllowed = Array.from(ids);
+  if (typeof saveDB === 'function') saveDB();
+  return db.protectAllowed;
+}
+
+async function grantProtectRole(guild, userId) {
+  const role = await getOrCreateProtectRole(guild);
+  if (!role) return false;
+  const member = await guild.members.fetch(userId).catch(() => null);
+  if (!member) return false;
+  await member.roles.add(role, '/protect add').catch(() => {});
+  return true;
+}
+
+async function revokeProtectRole(guild, userId) {
+  const role = await getOrCreateProtectRole(guild);
+  if (!role) return false;
+  const member = await guild.members.fetch(userId).catch(() => null);
+  if (!member) return false;
+  await member.roles.remove(role, '/protect remove').catch(() => {});
+  return true;
 }
 
 // ─────────────────────────────────────────────
@@ -50,7 +109,6 @@ async function punish(userId, guild, reason, mode = 'ban', db = null, saveDB = n
   const result = { rolesRemoved: false, timedOut: false, kicked: false, banned: false };
   if (!userId || !guild) return result;
 
-  // أبداً ما نعاقب أنفسنا ولا مالك السيرفر ولا المخولين
   if (guild.client?.user && userId === guild.client.user.id) return result;
   if (userId === guild.ownerId) return result;
   if (db && isProtectedUser(userId, guild, db)) return result;
@@ -88,52 +146,56 @@ async function punish(userId, guild, reason, mode = 'ban', db = null, saveDB = n
 }
 
 // ─────────────────────────────────────────────
-// نسخة احتياطية فورية عند التشغيل (بدون انتظار ساعة)
+// نسخة احتياطية لكل سيرفر على حدة (فورية عند التشغيل)
 // ─────────────────────────────────────────────
 async function backupNow(guild, db, saveDB) {
   if (!guild || !db) return false;
   try {
-    db.backup = db.backup || { roles: [], channels: [], members: [], settings: {} };
+    const snapshot = {
+      roles: guild.roles.cache
+        .filter((r) => r.id !== guild.id && !r.managed)
+        .map((r) => ({
+          id: r.id,
+          name: r.name,
+          color: r.color,
+          permissions: r.permissions.bitfield.toString(),
+          position: r.position,
+          hoist: r.hoist,
+          mentionable: r.mentionable
+        })),
+      channels: guild.channels.cache.map((c) => ({
+        id: c.id,
+        name: c.name,
+        type: c.type,
+        position: c.position,
+        parentId: c.parentId || null,
+        topic: c.topic || '',
+        nsfw: !!c.nsfw,
+        rateLimitPerUser: c.rateLimitPerUser || 0,
+        bitrate: c.bitrate || 0,
+        userLimit: c.userLimit || 0,
+        permissionOverwrites: c.permissionOverwrites
+          ? Array.from(c.permissionOverwrites.cache.values()).map((p) => ({
+              id: p.id,
+              type: p.type,
+              allow: p.allow.bitfield.toString(),
+              deny: p.deny.bitfield.toString()
+            }))
+          : []
+      })),
+      members: guild.members.cache.map((m) => ({
+        id: m.id,
+        username: m.user.username,
+        roles: m.roles.cache.map((r) => r.id),
+        joinedAt: m.joinedAt
+      }))
+    };
 
-    db.backup.roles = guild.roles.cache
-      .filter((r) => r.id !== guild.id && !r.managed)
-      .map((r) => ({
-        id: r.id,
-        name: r.name,
-        color: r.color,
-        permissions: r.permissions.bitfield.toString(),
-        position: r.position,
-        hoist: r.hoist,
-        mentionable: r.mentionable
-      }));
+    if (!db.guildBackups) db.guildBackups = {};
+    db.guildBackups[guild.id] = snapshot;
 
-    db.backup.channels = guild.channels.cache.map((c) => ({
-      id: c.id,
-      name: c.name,
-      type: c.type,
-      position: c.position,
-      parentId: c.parentId || null,
-      topic: c.topic || '',
-      nsfw: !!c.nsfw,
-      rateLimitPerUser: c.rateLimitPerUser || 0,
-      bitrate: c.bitrate || 0,
-      userLimit: c.userLimit || 0,
-      permissionOverwrites: c.permissionOverwrites
-        ? Array.from(c.permissionOverwrites.cache.values()).map((p) => ({
-            id: p.id,
-            type: p.type,
-            allow: p.allow.bitfield.toString(),
-            deny: p.deny.bitfield.toString()
-          }))
-        : []
-    }));
-
-    db.backup.members = guild.members.cache.map((m) => ({
-      id: m.id,
-      username: m.user.username,
-      roles: m.roles.cache.map((r) => r.id),
-      joinedAt: m.joinedAt
-    }));
+    // توافق مع الأوامر القديمة اللي تقرأ db.backup
+    if (!config.guildId || config.guildId === guild.id) db.backup = snapshot;
 
     if (typeof saveDB === 'function') saveDB();
     return true;
@@ -144,15 +206,17 @@ async function backupNow(guild, db, saveDB) {
 }
 
 // ─────────────────────────────────────────────
-// إرجاع كل الرومات والرتب المفقودة
+// إرجاع كل الرومات والرتب المفقودة في السيرفر اللي صار فيه الحذف
 // ─────────────────────────────────────────────
 async function restoreAll(guild, db, saveDB) {
   const restored = { roles: [], channels: [] };
-  if (!guild || !db || !db.backup) return restored;
+  if (!guild || !db) return restored;
+
+  const backup = (db.guildBackups && db.guildBackups[guild.id]) || db.backup;
+  if (!backup) return restored;
 
   try {
-    // 1) الرتب
-    for (const saved of db.backup.roles || []) {
+    for (const saved of backup.roles || []) {
       if (!saved.id || guild.roles.cache.has(saved.id)) continue;
       try {
         const role = await guild.roles.create({
@@ -172,7 +236,7 @@ async function restoreAll(guild, db, saveDB) {
         if (!db.roleMapping) db.roleMapping = {};
         db.roleMapping[oldId] = role.id;
 
-        for (const m of db.backup.members || []) {
+        for (const m of backup.members || []) {
           if (!(m.roles || []).includes(oldId)) continue;
           const member = await guild.members.fetch(m.id).catch(() => null);
           if (member) await member.roles.add(role).catch(() => {});
@@ -183,8 +247,7 @@ async function restoreAll(guild, db, saveDB) {
       }
     }
 
-    // 2) القنوات
-    for (const saved of db.backup.channels || []) {
+    for (const saved of backup.channels || []) {
       if (!saved.id || guild.channels.cache.has(saved.id)) continue;
       try {
         const opts = {
@@ -259,8 +322,12 @@ function clearHits(db, bucket, userId) {
 
 module.exports = {
   settings,
+  getTargetGuilds,
   getTargetGuild,
   isProtectedUser,
+  syncProtectAllowed,
+  grantProtectRole,
+  revokeProtectRole,
   alert,
   punish,
   backupNow,
