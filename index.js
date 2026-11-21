@@ -204,6 +204,21 @@ if (selfPingUrl) {
   console.log('[i] self ping مفعّل كل 5 دقائق: ' + selfPingUrl);
 }
 
+// مزامنة إعدادات لوحة التحكم — التعديلات من الموقع تتنفّذ بدون إعادة نشر
+const dashboardSync = require('./dashboard-sync');
+dashboardSync.start(
+  'security',
+  config,
+  ['ownerId', 'guildId', 'logChannelId', 'instantResponse', 'protectionSettings'],
+  (remote) => {
+    if (Array.isArray(remote.protectAllowed)) {
+      db.protectAllowed = remote.protectAllowed.slice();
+      if (typeof saveDB === 'function') saveDB();
+      console.log('[dashboard] 🔑 الصلاحيات المسموح بها: ' + db.protectAllowed.length);
+    }
+  }
+);
+
 process.on('SIGTERM', () => {
   console.log('[i] SIGTERM — إغلاق آمن...');
   client.destroy();
