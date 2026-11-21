@@ -21,6 +21,19 @@
     "banProtection": true,
     "kickProtection": true
   },
+  "instantResponse": {
+    "enabled": true,
+    "alertEnabled": true,
+    "deleteWindowMs": 60000,
+    "deleteThreshold": 2,
+    "spamWindowMs": 5000,
+    "spamThreshold": 10,
+    "spamTimeoutMinutes": 10,
+    "channelCreateWindowMs": 10000,
+    "channelCreateThreshold": 3,
+    "kickBotsOnJoin": true
+  },
+  "spamTimeoutMinutes": 10,
   "whitelist": [],
   "permanentRoles": [],
   "backupEnabled": true,
