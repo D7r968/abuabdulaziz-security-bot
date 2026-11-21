@@ -288,8 +288,8 @@ async function backupNow(guild, db, saveDB) {
 
     if (!db.guildBackups) db.guildBackups = {};
     db.guildBackups[guild.id] = snapshot;
-    // النسخة العامة القديمة كانت سبب النسخ بين السيرفرات — نمسحها نهائياً
-    if (db.backup) delete db.backup;
+    // النسخة العامة القديمة كانت سبب النسخ بين السيرفرات — نفرّغها ونمنع أي استخدام لها
+    db.backup = { roles: [], channels: [], members: [], settings: {}, guildId: '' };
 
     // فشل الحفظ على القرص ما يلغي النسخة الموجودة في الذاكرة — الاستضافة ترجّع القرص بعد كل إعادة نشر
     if (typeof saveDB === 'function') {
