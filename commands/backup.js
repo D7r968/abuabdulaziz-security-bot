@@ -20,6 +20,7 @@ module.exports = {
             const msg = await message.reply('⏳ جاري إنشاء النسخة الاحتياطية...');
 
             try {
+                db.backup.guildId = guild.id;
                 // حفظ الرولات
                 db.backup.roles = guild.roles.cache.map(role => ({
                     id: role.id,
@@ -96,8 +97,8 @@ module.exports = {
 
         // معلومات النسخة الاحتياطية
         if (subCommand === 'info' || subCommand === 'معلومات') {
-            if (!db.backup.settings) {
-                return message.reply('❌ لا توجد نسخة احتياطية محفوظة!');
+            if (!db.backup.settings || String(db.backup.guildId || '') !== String(guild.id)) {
+                return message.reply('❌ لا توجد نسخة احتياطية لهذا السيرفر تحديداً.');
             }
 
             const createdDate = new Date(db.backup.settings.createdAt);
@@ -118,8 +119,8 @@ module.exports = {
 
         // استعادة النسخة الاحتياطية
         if (subCommand === 'restore' || subCommand === 'استعادة') {
-            if (!db.backup.settings) {
-                return message.reply('❌ لا توجد نسخة احتياطية محفوظة!');
+            if (!db.backup.settings || String(db.backup.guildId || '') !== String(guild.id)) {
+                return message.reply('❌ لا توجد نسخة احتياطية لهذا السيرفر تحديداً — ما أقدر أستعيد نسخة سيرفر ثاني.');
             }
 
             const confirmMsg = await message.reply('⚠️ **تحذير:** هذه العملية ستقوم بـ:\n• حذف جميع الرولات والقنوات الحالية\n• إعادة إنشائها من النسخة الاحتياطية\n• إعادة الرولات للأعضاء\n\nهل أنت متأكد؟ اكتب `تأكيد` خلال 30 ثانية.');
