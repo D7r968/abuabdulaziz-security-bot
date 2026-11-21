@@ -143,17 +143,29 @@ function autoBackup() {
     if (!config.backupEnabled) return;
 
     const run = async () => {
-        const guild = guard.getTargetGuild(client);
-        if (!guild) return;
-        const ok = await guard.backupNow(guild, db, saveDB);
+        const guilds = guard.getTargetGuilds(client);
+        if (!guilds.length) return;
+        let okCount = 0;
+        let totalRoles = 0;
+        let totalChannels = 0;
+
+        for (const guild of guilds) {
+            const ok = await guard.backupNow(guild, db, saveDB);
+            if (ok) {
+                okCount++;
+                const snap = db.guildBackups[guild.id] || {};
+                totalRoles += (snap.roles || []).length;
+                totalChannels += (snap.channels || []).length;
+            }
+        }
         console.log(
-            ok
-                ? chalk.green(`[نسخ احتياطي] تم الحفظ ✅ ${db.backup.roles.length} رتبة / ${db.backup.channels.length} قناة`)
+            okCount
+                ? chalk.green(`[نسخ احتياطي] ${okCount} سيرفر ✅ ${totalRoles} رتبة / ${totalChannels} قناة`)
                 : chalk.red('[نسخ احتياطي] فشل الحفظ ❌')
         );
     };
 
-    run(); // فوراً عند التشغيل
+    // النسخة الفورية تتم في ready.js بعد اكتمال تحميل السيرفرات
     setInterval(run, config.autoBackupInterval);
 }
 
