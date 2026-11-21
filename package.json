@@ -1,0 +1,21 @@
+{
+  "name": "discord-protection-bot",
+  "version": "2.0.0",
+  "description": "بوت حماية ديسكورد احترافي مع حماية شاملة",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "keywords": ["discord", "bot", "protection", "security"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "fs": "^0.0.1-security",
+    "chalk": "^4.1.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}
