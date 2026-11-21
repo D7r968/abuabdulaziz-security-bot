@@ -166,7 +166,7 @@ function autoBackup() {
     if (!config.backupEnabled) return;
 
     const run = async () => {
-        const guilds = guard.getTargetGuilds(client);
+        const guilds = guard.getTargetGuilds(client).filter((g) => guard.isBackupEnabled(g));
         if (!guilds.length) return;
         let okCount = 0;
         let totalRoles = 0;
@@ -333,12 +333,22 @@ const dashboardSync = require('./dashboard-sync');
 dashboardSync.start(
   'security',
   config,
-  ['ownerId', 'guildId', 'logChannelId', 'instantResponse', 'protectionSettings', 'backupEnabled', 'autoBackupInterval'],
+  ['ownerId', 'guildId', 'logChannelId', 'instantResponse', 'protectionSettings', 'backupEnabled', 'autoBackupInterval', 'guildBackupPrefs'],
   (remote) => {
     if (Array.isArray(remote.protectAllowed)) {
       db.protectAllowed = remote.protectAllowed.slice();
       if (typeof saveDB === 'function') saveDB();
       console.log('[dashboard] 🔑 الصلاحيات المسموح بها: ' + db.protectAllowed.length);
+    }
+    // أي سيرفر ما فعّل الحفظ → نمسح نسخته القديمة حتى ما يرجع شي من سيرفر ثاني
+    const prefs = remote.guildBackupPrefs || {};
+    let removed = 0;
+    for (const gid of Object.keys(db.guildBackups || {})) {
+      if (prefs[gid] !== true) { delete db.guildBackups[gid]; removed++; }
+    }
+    if (removed && typeof saveDB === 'function') {
+      saveDB();
+      console.log('[dashboard] 🗑️ حذف ' + removed + ' نسخة لسيرفرات غير مفعّلة للحفظ');
     }
   }
 );
