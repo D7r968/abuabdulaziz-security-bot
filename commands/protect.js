@@ -20,6 +20,7 @@ module.exports = {
 
     if (['add', 'اضافة', 'اضف'].includes(sub)) {
       if (!target) return message.reply('❌ الاستخدام: `!protect add @الشخص`');
+      await guard.grantProtectRole(message.guild, target.id);
       if (!db.protectAllowed.includes(target.id)) db.protectAllowed.push(target.id);
       if (typeof saveDB === 'function') saveDB();
       return message.reply(`✅ ${target.tag} صار معه صلاحية حماية.`);
@@ -27,6 +28,7 @@ module.exports = {
 
     if (['remove', 'حذف', 'شيل'].includes(sub)) {
       if (!target) return message.reply('❌ الاستخدام: `!protect remove @الشخص`');
+      await guard.revokeProtectRole(message.guild, target.id);
       db.protectAllowed = db.protectAllowed.filter((id) => id !== target.id);
       if (typeof saveDB === 'function') saveDB();
       return message.reply(`✅ انشالت الصلاحية من ${target.tag}.`);
