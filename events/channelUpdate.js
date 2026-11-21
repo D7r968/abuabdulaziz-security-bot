@@ -1,204 +1,104 @@
-const { EmbedBuilder, AuditLogEvent } = require('discord.js');
+'use strict';
+
+const { AuditLogEvent } = require('discord.js');
 const config = require('../config.json');
+const guard = require('../guard');
+
+function overwriteFingerprint(overwrites) {
+  return Array.from(overwrites?.values() || [])
+    .map((p) => `${p.id}:${p.allow?.bitfield || 0n}:${p.deny?.bitfield || 0n}`)
+    .sort()
+    .join('|');
+}
+
+function currentOverwrites(channel) {
+  return Array.from(channel.permissionOverwrites?.cache?.values() || []).map((p) => ({
+    id: p.id,
+    type: p.type ?? (p.id === channel.guild?.id ? 0 : 1),
+    allow: p.allow.bitfield.toString(),
+    deny: p.deny.bitfield.toString()
+  }));
+}
 
 module.exports = {
-    name: 'channelUpdate',
-    async execute(oldChannel, newChannel, client, db, saveDB) {
-        if (!config.protectionSettings.channelProtection) return;
+  name: 'channelUpdate',
+  async execute(oldChannel, newChannel, client, db, saveDB) {
+    const ir = guard.settings();
+    if (ir.enabled === false) return;
+    if (!config.protectionSettings.channelProtection) return;
 
-        const guild = newChannel.guild;
-        
-        // التحقق من تغيير الصلاحيات
-        const oldPermissions = oldChannel.permissionOverwrites?.cache || new Map();
-        const newPermissions = newChannel.permissionOverwrites?.cache || new Map();
-        
-        // مقارنة الصلاحيات
-        let permissionsChanged = false;
-        
-        console.log(`🔍 فحص القناة: ${newChannel.name}`);
-        console.log(`   الصلاحيات القديمة: ${oldPermissions.size}`);
-        console.log(`   الصلاحيات الجديدة: ${newPermissions.size}`);
-        
-        // التحقق من عدد الصلاحيات
-        if (oldPermissions.size !== newPermissions.size) {
-            permissionsChanged = true;
-            console.log(`   ⚠️ تغيير في العدد!`);
-        } else {
-            // التحقق من محتوى الصلاحيات
-            for (const [id, oldPerm] of oldPermissions) {
-                const newPerm = newPermissions.get(id);
-                if (!newPerm) {
-                    permissionsChanged = true;
-                    console.log(`   ⚠️ صلاحية محذوفة: ${id}`);
-                    break;
-                }
-                
-                const oldAllow = oldPerm.allow?.bitfield || BigInt(0);
-                const newAllow = newPerm.allow?.bitfield || BigInt(0);
-                const oldDeny = oldPerm.deny?.bitfield || BigInt(0);
-                const newDeny = newPerm.deny?.bitfield || BigInt(0);
-                
-                if (oldAllow !== newAllow || oldDeny !== newDeny) {
-                    permissionsChanged = true;
-                    console.log(`   ⚠️ تغيير في صلاحيات: ${id}`);
-                    console.log(`      القديم - Allow: ${oldAllow}, Deny: ${oldDeny}`);
-                    console.log(`      الجديد - Allow: ${newAllow}, Deny: ${newDeny}`);
-                    break;
-                }
-            }
-        }
-        
-        if (permissionsChanged) {
-            console.log(`⚠️ تم اكتشاف تغيير في صلاحيات ${newChannel.name}!`);
-            
-            // الانتظار للحصول على audit log
-            await new Promise(resolve => setTimeout(resolve, 500));
-            
-            try {
-                const auditLogs = await guild.fetchAuditLogs({
-                    type: AuditLogEvent.ChannelUpdate,
-                    limit: 1
-                });
+    const guild = newChannel.guild;
+    if (!guild) return;
 
-                const auditEntry = auditLogs.entries.first();
-                
-                if (auditEntry && auditEntry.target.id === newChannel.id) {
-                    const executor = auditEntry.executor;
-                    
-                    // التحقق من الوايت لست
-                    if (db.whitelist && db.whitelist.includes(executor.id)) {
-                        console.log(`✅ ${executor.tag} غيّر صلاحيات ${newChannel.name} (في الوايت لست)`);
-                        
-                        // تحديث النسخة الاحتياطية
-                        const channelIndex = db.backup.channels.findIndex(c => c.id === newChannel.id);
-                        if (channelIndex !== -1) {
-                            db.backup.channels[channelIndex].permissionOverwrites = Array.from(newChannel.permissionOverwrites.cache.values()).map(p => ({
-                                id: p.id,
-                                type: p.type,
-                                allow: p.allow.bitfield.toString(),
-                                deny: p.deny.bitfield.toString()
-                            }));
-                            saveDB();
-                        }
-                        return;
-                    }
-                    
-                    // التحقق من المالك
-                    if (executor.id === guild.ownerId) {
-                        console.log(`✅ المالك ${executor.tag} غيّر صلاحيات ${newChannel.name}`);
-                        
-                        // تحديث النسخة الاحتياطية
-                        const channelIndex = db.backup.channels.findIndex(c => c.id === newChannel.id);
-                        if (channelIndex !== -1) {
-                            db.backup.channels[channelIndex].permissionOverwrites = Array.from(newChannel.permissionOverwrites.cache.values()).map(p => ({
-                                id: p.id,
-                                type: p.type,
-                                allow: p.allow.bitfield.toString(),
-                                deny: p.deny.bitfield.toString()
-                            }));
-                            saveDB();
-                        }
-                        return;
-                    }
-                    
-                    console.log(`⚠️ ${executor.tag} غيّر صلاحيات ${newChannel.name} بدون صلاحيات!`);
-                    
-                    // إزالة رتب المخالف
-                    const executorMember = await guild.members.fetch(executor.id).catch(() => null);
-                    if (executorMember) {
-                        await executorMember.roles.set([]).catch(console.error);
-                        console.log(`🔨 تم إزالة جميع رتب ${executor.tag}`);
-                    }
-                    
-                    // استعادة الصلاحيات القديمة من النسخة الاحتياطية
-                    const backupChannel = db.backup.channels.find(c => c.id === oldChannel.id);
-                    
-                    if (backupChannel && backupChannel.permissionOverwrites) {
-                        console.log(`🔄 جاري استعادة صلاحيات ${newChannel.name} (${backupChannel.permissionOverwrites.length} صلاحية)...`);
-                        
-                        try {
-                            // حذف جميع الصلاحيات الحالية
-                            for (const [id, perm] of newChannel.permissionOverwrites.cache) {
-                                await newChannel.permissionOverwrites.delete(id, 'إزالة صلاحيات غير مصرح بها')
-                                    .catch(err => console.error(`خطأ في حذف صلاحية ${id}:`, err));
-                            }
-                            
-                            console.log(`   ✅ تم حذف الصلاحيات الحالية`);
-                            
-                            // استعادة الصلاحيات من النسخة
-                            let restored = 0;
-                            for (const perm of backupChannel.permissionOverwrites) {
-                                try {
-                                    await newChannel.permissionOverwrites.create(perm.id, {
-                                        allow: BigInt(perm.allow),
-                                        deny: BigInt(perm.deny)
-                                    }, { reason: 'استعادة صلاحيات بعد تعديل غير مصرح' });
-                                    restored++;
-                                    console.log(`   ✅ ${restored}/${backupChannel.permissionOverwrites.length} - تم استعادة صلاحية ${perm.id}`);
-                                } catch (err) {
-                                    console.error(`   ❌ خطأ في استعادة صلاحية ${perm.id}:`, err);
-                                }
-                            }
-                            
-                            console.log(`✅ اكتمل! تم استعادة ${restored} من ${backupChannel.permissionOverwrites.length} صلاحية لـ ${newChannel.name}`);
-                        } catch (error) {
-                            console.error(`خطأ في استعادة صلاحيات ${newChannel.name}:`, error);
-                        }
-                    } else {
-                        console.log(`⚠️ لا توجد نسخة احتياطية لصلاحيات ${newChannel.name}`);
-                        console.log(`   استخدم: !fix roles لتحديث النسخة الاحتياطية`);
-                    }
-                    
-                    // إرسال لوق
-                    const embed = new EmbedBuilder()
-                        .setColor('#FF0000')
-                        .setTitle('🚨 محاولة تغيير صلاحيات قناة')
-                        .setDescription(`**المخالف:** ${executor.tag} (${executor.id})\n**القناة:** ${newChannel.name}\n**الإجراء:** تم استعادة الصلاحيات وإزالة رتب المخالف`)
-                        .addFields(
-                            { name: '⚠️ التغيير', value: 'تم محاولة تغيير صلاحيات القناة', inline: false },
-                            { name: '✅ الحماية', value: 'تم استعادة الصلاحيات الأصلية', inline: false }
-                        )
-                        .setTimestamp();
-                    
-                    await client.sendLog(embed);
-                }
-            } catch (error) {
-                console.error('خطأ في التحقق من تغيير صلاحيات القناة:', error);
-            }
-        }
-        
-        // تحديث معلومات القناة في النسخة الاحتياطية (للتغييرات الأخرى)
-        try {
-            const channelIndex = db.backup.channels.findIndex(c => c.id === newChannel.id);
-            
-            if (channelIndex !== -1) {
-                db.backup.channels[channelIndex] = {
-                    id: newChannel.id,
-                    name: newChannel.name,
-                    type: newChannel.type,
-                    position: newChannel.position,
-                    topic: newChannel.topic || '',
-                    nsfw: newChannel.nsfw || false,
-                    parent: newChannel.parentId,
-                    permissionOverwrites: Array.from(newChannel.permissionOverwrites.cache.values()).map(p => ({
-                        id: p.id,
-                        type: p.type,
-                        allow: p.allow.bitfield.toString(),
-                        deny: p.deny.bitfield.toString()
-                    }))
-                };
-                
-                // حفظ كل 5 تحديثات
-                if (!global.channelUpdateCount) global.channelUpdateCount = 0;
-                global.channelUpdateCount++;
-                
-                if (global.channelUpdateCount >= 5) {
-                    saveDB();
-                    global.channelUpdateCount = 0;
-                }
-            }
-        } catch (error) {
-            console.error('خطأ في تحديث النسخة الاحتياطية للقناة:', error);
-        }
+    const changed =
+      overwriteFingerprint(oldChannel.permissionOverwrites?.cache) !==
+      overwriteFingerprint(newChannel.permissionOverwrites?.cache);
+    if (!changed) return;
+
+    await new Promise((resolve) => setTimeout(resolve, 400));
+
+    const type = AuditLogEvent.ChannelOverwriteUpdate ?? AuditLogEvent.ChannelUpdate;
+    const entry = await guard.auditExecutor(guild, type, newChannel.id, 20000);
+    if (!entry?.executor) return;
+    const executor = entry.executor;
+
+    if (client.user && executor.id === client.user.id) return;
+    const backup = guard.getBackup(guild, db);
+    const saved = (backup.channels || []).find((c) => c.id === newChannel.id);
+
+    // المخول يغيّر الصلاحيات → نحدّث النسخة الاحتياطية بدل ما نرجّعها
+    if (guard.isProtectedUser(executor.id, guild, db)) {
+      if (saved) {
+        saved.permissionOverwrites = currentOverwrites(newChannel);
+        if (typeof saveDB === 'function') saveDB();
+      }
+      return;
     }
+
+    // إرجاع الصلاحيات الأصلية فوراً
+    if (saved && Array.isArray(saved.permissionOverwrites)) {
+      try {
+        await newChannel.permissionOverwrites.set(
+          saved.permissionOverwrites.map((p) => ({
+            id: p.id,
+            type: p.type ?? (p.id === guild.id ? 0 : 1),
+            allow: BigInt(p.allow || '0'),
+            deny: BigInt(p.deny || '0')
+          })),
+          'حماية: إرجاع صلاحيات بعد تعديل غير مصرح'
+        );
+      } catch (err) {
+        console.error('[channelUpdate] revert failed:', err.message);
+      }
+    }
+
+    const count = guard.hit(db, 'permEdit', executor.id, 60000);
+    const strikes = ir.permissionEditStrikes || 1;
+    let res = { kicked: false, banned: false };
+    if (count >= strikes) {
+      res = await guard.punish(
+        executor.id,
+        guild,
+        `تعديل صلاحيات ${newChannel.name}`,
+        count >= 3 ? 'ban' : 'kick',
+        db,
+        saveDB
+      );
+      guard.clearHits(db, 'permEdit', executor.id);
+    }
+    if (typeof saveDB === 'function') saveDB();
+
+    console.log(
+      `⚠️ ${executor.tag} غيّر صلاحيات ${newChannel.name} → أُرجعت + ${res.banned ? 'BAN' : res.kicked ? 'KICK' : 'تحذير'}`
+    );
+
+    await guard.alert(
+      client,
+      '🚨 تعديل صلاحيات قناة — إرجاع فوري',
+      `**المخالف:** ${executor.tag} (${executor.id})\n` +
+        `**القناة:** ${newChannel.name}\n` +
+        `**الإجراء:** إرجاع الصلاحيات + ${res.banned ? 'سحب الرتب + باي' : res.kicked ? 'سحب الرتب + كيك' : 'رصد التعديل'}`,
+      '#FF0000'
+    );
+  }
 };
