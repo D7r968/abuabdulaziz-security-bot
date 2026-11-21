@@ -33,16 +33,28 @@ module.exports = {
       status: 'dnd'
     });
 
-    // 📦 نسخة احتياطية فورية عند التشغيل (بدون ما نستنى ساعة)
-    const guild = guard.getTargetGuild(client);
-    if (guild && config.backupEnabled) {
-      console.log(chalk.blue(`📦 جاري حفظ نسخة احتياطية من: ${guild.name}...`));
-      const ok = await guard.backupNow(guild, db, saveDB);
-      console.log(
-        ok
-          ? chalk.green(`✅ جاهز: ${db.backup.roles.length} رتبة / ${db.backup.channels.length} قناة / ${db.backup.members.length} عضو\n`)
-          : chalk.red('❌ فشل النسخ الاحتياطي\n')
-      );
+    // 🔑 استرجاع الصلاحيات من الرول الدائم أولاً (يبقى بعد إعادة التشغيل)
+    const guilds = guard.getTargetGuilds(client);
+    try {
+      const allowed = await guard.syncProtectAllowed(client, db, saveDB);
+      console.log(chalk.cyan(`🔑 الصلاحيات المحفوظة: ${allowed.length} شخص\n`));
+    } catch (err) {
+      console.error(chalk.red('❌ فشل استرجاع الصلاحيات:'), err.message);
+    }
+
+    // 📦 نسخة احتياطية فورية لكل سيرفر على حدة (بدون ما نستنى ساعة)
+    if (guilds.length && config.backupEnabled) {
+      for (const guild of guilds) {
+        console.log(chalk.blue(`📦 جاري حفظ نسخة احتياطية من: ${guild.name}...`));
+        const ok = await guard.backupNow(guild, db, saveDB);
+        const snap = db.guildBackups[guild.id] || {};
+        console.log(
+          ok
+            ? chalk.green(`✅ جاهز: ${(snap.roles || []).length} رتبة / ${(snap.channels || []).length} قناة / ${(snap.members || []).length} عضو`)
+            : chalk.red('❌ فشل النسخ الاحتياطي')
+        );
+      }
+      console.log('');
     } else {
       console.log(chalk.yellow('⚠️ ما فيه سيرفر متاح للنسخ الاحتياطي — تأكد من إضافة البوت للسيرفر\n'));
     }
