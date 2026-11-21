@@ -1,13 +1,13 @@
 'use strict';
 
-const { EmbedBuilder, ChannelType } = require('discord.js');
+const { EmbedBuilder, ChannelType, AuditLogEvent } = require('discord.js');
 const config = require('./config.json');
 
 function settings() {
   return config.instantResponse || {};
 }
 
-// guildId فاضي في الإعدادات → نستخدم كل السيرفرات اللي البوت فيها
+// guildId فاضي → نشتغل على كل السيرفرات اللي البوت فيها
 function getTargetGuilds(client) {
   if (!client || !client.guilds) return [];
   const configured = config.guildId && client.guilds.cache.get(config.guildId);
@@ -17,6 +17,11 @@ function getTargetGuilds(client) {
 
 function getTargetGuild(client) {
   return getTargetGuilds(client)[0] || null;
+}
+
+function getBackup(guild, db) {
+  if (!guild || !db) return {};
+  return (db.guildBackups && db.guildBackups[guild.id]) || db.backup || {};
 }
 
 // ─────────────────────────────────────────────
@@ -33,7 +38,6 @@ function isProtectedUser(userId, guild, db) {
 
 // ─────────────────────────────────────────────
 // تخزين الصلاحيات بشكل دائم عبر رول في ديسكورد
-// (لأن database.json على Render يُمحى عند كل إعادة تشغيل)
 // ─────────────────────────────────────────────
 const PROTECT_ROLE_NAME = '🛡️ PROTECTED';
 
@@ -146,7 +150,26 @@ async function punish(userId, guild, reason, mode = 'ban', db = null, saveDB = n
 }
 
 // ─────────────────────────────────────────────
-// نسخة احتياطية لكل سيرفر على حدة (فورية عند التشغيل)
+// جلب منفذ الحدث من سجل التدقيق
+// ─────────────────────────────────────────────
+async function auditExecutor(guild, type, targetId, maxAgeMs = 20000) {
+  if (!guild) return null;
+  try {
+    const logs = await guild.fetchAuditLogs({ type, limit: 20 });
+    const entry =
+      logs.entries.find(
+        (e) => (!targetId || e.target?.id === targetId) && Date.now() - e.createdTimestamp < maxAgeMs
+      ) || logs.entries.first();
+    if (!entry || (maxAgeMs && Date.now() - entry.createdTimestamp > maxAgeMs)) return null;
+    return entry;
+  } catch (err) {
+    console.error('[guard] audit lookup:', err.message);
+    return null;
+  }
+}
+
+// ─────────────────────────────────────────────
+// نسخة احتياطية لكل سيرفر على حدة
 // ─────────────────────────────────────────────
 async function backupNow(guild, db, saveDB) {
   if (!guild || !db) return false;
@@ -188,13 +211,17 @@ async function backupNow(guild, db, saveDB) {
         username: m.user.username,
         roles: m.roles.cache.map((r) => r.id),
         joinedAt: m.joinedAt
+      })),
+      emojis: guild.emojis.cache.map((e) => ({
+        id: e.id,
+        name: e.name,
+        animated: !!e.animated,
+        url: `https://cdn.discordapp.com/emojis/${e.id}.${e.animated ? 'gif' : 'png'}`
       }))
     };
 
     if (!db.guildBackups) db.guildBackups = {};
     db.guildBackups[guild.id] = snapshot;
-
-    // توافق مع الأوامر القديمة اللي تقرأ db.backup
     if (!config.guildId || config.guildId === guild.id) db.backup = snapshot;
 
     if (typeof saveDB === 'function') saveDB();
@@ -206,14 +233,23 @@ async function backupNow(guild, db, saveDB) {
 }
 
 // ─────────────────────────────────────────────
-// إرجاع كل الرومات والرتب المفقودة في السيرفر اللي صار فيه الحذف
+// إرجاع كل الرومات والرتب والإيموجي (بقفل يمنع التكرار)
 // ─────────────────────────────────────────────
-async function restoreAll(guild, db, saveDB) {
-  const restored = { roles: [], channels: [] };
-  if (!guild || !db) return restored;
+const restoreQueues = new Map();
 
-  const backup = (db.guildBackups && db.guildBackups[guild.id]) || db.backup;
-  if (!backup) return restored;
+async function restoreAll(guild, db, saveDB) {
+  if (!guild) return { roles: [], channels: [], emojis: [] };
+  const key = guild.id;
+  const previous = restoreQueues.get(key) || Promise.resolve();
+  const next = previous.catch(() => {}).then(() => doRestore(guild, db, saveDB));
+  restoreQueues.set(key, next);
+  return next;
+}
+
+async function doRestore(guild, db, saveDB) {
+  const restored = { roles: [], channels: [], emojis: [] };
+  const backup = getBackup(guild, db);
+  if (!backup || (!backup.roles && !backup.channels && !backup.emojis)) return restored;
 
   try {
     for (const saved of backup.roles || []) {
@@ -278,7 +314,7 @@ async function restoreAll(guild, db, saveDB) {
               allow: BigInt(perm.allow || '0'),
               deny: BigInt(perm.deny || '0')
             });
-          } catch { /* صلاحية غير صالحة — نتجاهلها */ }
+          } catch { /* نتجاهل الصلاحيات غير الصالحة */ }
         }
 
         if (db.savedMessages && db.savedMessages[oldId]) {
@@ -287,6 +323,21 @@ async function restoreAll(guild, db, saveDB) {
         }
       } catch (err) {
         console.error(`[guard] restore channel ${saved.name}:`, err.message);
+      }
+    }
+
+    for (const saved of backup.emojis || []) {
+      if (!saved.id || guild.emojis.cache.has(saved.id)) continue;
+      try {
+        const response = await fetch(saved.url);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const buffer = Buffer.from(await response.arrayBuffer());
+        const emoji = await guild.emojis.create({ attachment: buffer, name: saved.name });
+        const oldId = saved.id;
+        saved.id = emoji.id;
+        restored.emojis.push(`${saved.name} (${oldId} → ${emoji.id})`);
+      } catch (err) {
+        console.error(`[guard] restore emoji ${saved.name}:`, err.message);
       }
     }
 
@@ -324,12 +375,14 @@ module.exports = {
   settings,
   getTargetGuilds,
   getTargetGuild,
+  getBackup,
   isProtectedUser,
   syncProtectAllowed,
   grantProtectRole,
   revokeProtectRole,
   alert,
   punish,
+  auditExecutor,
   backupNow,
   restoreAll,
   hit,
