@@ -2,6 +2,7 @@ const { Client, GatewayIntentBits, Partials, Collection, EmbedBuilder, Permissio
 const fs = require('fs');
 const http = require('http');
 const config = require('./config.json');
+const guard = require('./guard');
 const chalk = require('chalk');
 
 const client = new Client({
@@ -33,6 +34,7 @@ let db = {
         settings: {}
     },
     whitelist: config.whitelist || [],
+    protectAllowed: [],
     permanentRoles: config.permanentRoles || [],
     trustedUsers: {},
     antiRaid: {
@@ -131,58 +133,28 @@ client.sendLog = async (embed) => {
     }
 };
 
-// دالة التحقق من الوايت لست
-client.isWhitelisted = (userId) => {
-    return userId === config.ownerId || db.whitelist.includes(userId);
+// دالة التحقق من الوايت لست / الصلاحيات
+client.isWhitelisted = (userId, guild) => {
+    return guard.isProtectedUser(userId, guild || guard.getTargetGuild(client), db);
 };
 
-// دالة حفظ نسخة احتياطية تلقائية
+// دالة حفظ نسخة احتياطية تلقائية (تشتغل حتى لو guildId فاضي)
 function autoBackup() {
     if (!config.backupEnabled) return;
-    
-    setInterval(async () => {
-        const guild = client.guilds.cache.get(config.guildId);
+
+    const run = async () => {
+        const guild = guard.getTargetGuild(client);
         if (!guild) return;
+        const ok = await guard.backupNow(guild, db, saveDB);
+        console.log(
+            ok
+                ? chalk.green(`[نسخ احتياطي] تم الحفظ ✅ ${db.backup.roles.length} رتبة / ${db.backup.channels.length} قناة`)
+                : chalk.red('[نسخ احتياطي] فشل الحفظ ❌')
+        );
+    };
 
-        console.log(chalk.blue('[نظام النسخ الاحتياطي] جاري حفظ نسخة احتياطية...'));
-        
-        // حفظ الرولات
-        db.backup.roles = guild.roles.cache.map(role => ({
-            id: role.id,
-            name: role.name,
-            color: role.color,
-            permissions: role.permissions.bitfield.toString(),
-            position: role.position,
-            hoist: role.hoist,
-            mentionable: role.mentionable
-        }));
-
-        // حفظ الرومات
-        db.backup.channels = guild.channels.cache.map(channel => ({
-            id: channel.id,
-            name: channel.name,
-            type: channel.type,
-            position: channel.position,
-            parentId: channel.parentId,
-            permissionOverwrites: channel.permissionOverwrites.cache.map(po => ({
-                id: po.id,
-                type: po.type,
-                allow: po.allow.bitfield.toString(),
-                deny: po.deny.bitfield.toString()
-            }))
-        }));
-
-        // حفظ الأعضاء
-        db.backup.members = guild.members.cache.map(member => ({
-            id: member.id,
-            username: member.user.username,
-            roles: member.roles.cache.map(r => r.id),
-            joinedAt: member.joinedAt
-        }));
-
-        saveDB();
-        console.log(chalk.green('[نظام النسخ الاحتياطي] تم الحفظ بنجاح ✅'));
-    }, config.autoBackupInterval);
+    run(); // فوراً عند التشغيل
+    setInterval(run, config.autoBackupInterval);
 }
 
 
