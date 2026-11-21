@@ -31,7 +31,16 @@
     "spamTimeoutMinutes": 10,
     "channelCreateWindowMs": 10000,
     "channelCreateThreshold": 3,
-    "kickBotsOnJoin": true
+    "kickBotsOnJoin": true,
+    "slowSpamWindowMs": 60000,
+    "slowSpamThreshold": 20,
+    "massBanThreshold": 2,
+    "massBanWindowMs": 60000,
+    "massKickThreshold": 3,
+    "massKickWindowMs": 60000,
+    "webhookStrikes": 1,
+    "emojiStrikes": 1,
+    "permissionEditStrikes": 1
   },
   "spamTimeoutMinutes": 10,
   "whitelist": [],
