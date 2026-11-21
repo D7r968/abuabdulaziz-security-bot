@@ -239,6 +239,25 @@ async function backupNow(guild, db, saveDB) {
         name: e.name,
         animated: !!e.animated,
         url: `https://cdn.discordapp.com/emojis/${e.id}.${e.animated ? 'gif' : 'png'}`
+      })),
+      // إعدادات السيرفر نفسها عشان يرجع "نفس ما كان" بعد التخريب
+      guild: {
+        name: guild.name,
+        description: guild.description || '',
+        icon: guild.iconURL({ size: 512, dynamic: true }) || null,
+        banner: guild.bannerURL({ size: 512, dynamic: true }) || null,
+        verificationLevel: guild.verificationLevel,
+        defaultMessageNotifications: guild.defaultMessageNotifications,
+        explicitContentFilter: guild.explicitContentFilter,
+        preferredLocale: guild.preferredLocale,
+        afkTimeout: guild.afkTimeout,
+        afkChannelId: guild.afkChannelId || null
+      },
+      webhooks: Array.from((await guild.webhooks.fetch().catch(() => ({ values: () => [] }))).values()).map((w) => ({
+        id: w.id,
+        name: w.name,
+        channelId: w.channelId,
+        avatar: w.avatarURL({ size: 128 }) || null
       }))
     };
 
@@ -260,7 +279,7 @@ async function backupNow(guild, db, saveDB) {
 const restoreQueues = new Map();
 
 async function restoreAll(guild, db, saveDB) {
-  if (!guild) return { roles: [], channels: [], emojis: [] };
+  if (!guild) return { roles: [], channels: [], emojis: [], members: [], webhooks: [], guild: [] };
   const key = guild.id;
   const previous = restoreQueues.get(key) || Promise.resolve();
   const next = previous.catch(() => {}).then(() => doRestore(guild, db, saveDB));
@@ -269,7 +288,7 @@ async function restoreAll(guild, db, saveDB) {
 }
 
 async function doRestore(guild, db, saveDB) {
-  const restored = { roles: [], channels: [], emojis: [] };
+  const restored = { roles: [], channels: [], emojis: [], members: [], webhooks: [], guild: [] };
   const backup = getBackup(guild, db);
   if (!backup || (!backup.roles && !backup.channels && !backup.emojis)) return restored;
 
@@ -302,6 +321,28 @@ async function doRestore(guild, db, saveDB) {
         }
       } catch (err) {
         console.error(`[guard] restore role ${saved.name}:`, err.message);
+      }
+    }
+
+    // الرتب الموجودة لكن معدّلة → نرجّعها لاسمها ولونها وصلاحياتها الأصلية
+    for (const saved of backup.roles || []) {
+      const current = guild.roles.cache.get(saved.id);
+      if (!current || current.id === guild.id || current.managed) continue;
+      try {
+        const patch = {};
+        if (current.name !== saved.name) patch.name = saved.name;
+        if (current.color !== saved.color) patch.color = saved.color;
+        if (String(current.permissions.bitfield) !== String(saved.permissions || '0')) {
+          patch.permissions = BigInt(saved.permissions || '0');
+        }
+        if (current.hoist !== !!saved.hoist) patch.hoist = !!saved.hoist;
+        if (current.mentionable !== !!saved.mentionable) patch.mentionable = !!saved.mentionable;
+        if (Object.keys(patch).length) {
+          await current.edit(patch, 'استعادة تلقائية بعد تخريب');
+          restored.roles.push(`${saved.name} (تم تعديله)`);
+        }
+      } catch (err) {
+        console.error(`[guard] re-edit role ${saved.name}:`, err.message);
       }
     }
 
@@ -348,6 +389,53 @@ async function doRestore(guild, db, saveDB) {
       }
     }
 
+    // القنوات الموجودة لكن معدّلة → نرجّع الاسم والوصف والترتيب والصلاحيات
+    for (const saved of backup.channels || []) {
+      const current = guild.channels.cache.get(saved.id);
+      if (!current) continue;
+      try {
+        const patch = {};
+        if (current.name !== saved.name) patch.name = saved.name;
+        if ((current.topic || '') !== (saved.topic || '')) patch.topic = saved.topic || null;
+        if (!!current.nsfw !== !!saved.nsfw) patch.nsfw = !!saved.nsfw;
+        if ((current.rateLimitPerUser || 0) !== (saved.rateLimitPerUser || 0)) {
+          patch.rateLimitPerUser = saved.rateLimitPerUser || 0;
+        }
+        if ((current.bitrate || 0) !== (saved.bitrate || 0) && saved.bitrate) patch.bitrate = saved.bitrate;
+        if ((current.userLimit || 0) !== (saved.userLimit || 0) && saved.userLimit) patch.userLimit = saved.userLimit;
+        if (current.position !== saved.position) patch.position = saved.position;
+        if (saved.parentId) {
+          if (current.parentId !== saved.parentId && guild.channels.cache.has(saved.parentId)) {
+            patch.parent = saved.parentId;
+          }
+        }
+        if (Object.keys(patch).length) {
+          await current.edit(patch, 'استعادة تلقائية بعد تخريب');
+          restored.channels.push(`${saved.name} (تم تعديله)`);
+        }
+
+        const desired = new Map((saved.permissionOverwrites || []).map((p) => [p.id, p]));
+        for (const perm of current.permissionOverwrites.cache.values()) {
+          if (!desired.has(perm.id)) await perm.delete('استعادة تلقائية بعد تخريب').catch(() => {});
+        }
+        for (const perm of desired.values()) {
+          const allow = BigInt(perm.allow || '0');
+          const deny = BigInt(perm.deny || '0');
+          const existing = current.permissionOverwrites.cache.get(perm.id);
+          if (!existing) {
+            await current.permissionOverwrites.create(perm.id, { allow, deny }).catch(() => {});
+          } else if (
+            String(existing.allow.bitfield) !== String(allow) ||
+            String(existing.deny.bitfield) !== String(deny)
+          ) {
+            await current.permissionOverwrites.edit(perm.id, { allow, deny }).catch(() => {});
+          }
+        }
+      } catch (err) {
+        console.error(`[guard] re-edit channel ${saved.name}:`, err.message);
+      }
+    }
+
     for (const saved of backup.emojis || []) {
       if (!saved.id || guild.emojis.cache.has(saved.id)) continue;
       try {
@@ -360,6 +448,90 @@ async function doRestore(guild, db, saveDB) {
         restored.emojis.push(`${saved.name} (${oldId} → ${emoji.id})`);
       } catch (err) {
         console.error(`[guard] restore emoji ${saved.name}:`, err.message);
+      }
+    }
+
+    // الرتب اللي انسحبت من الأعضاء → نرجّعها (بدون ما نلمس المالك أو المحميين)
+    for (const saved of backup.members || []) {
+      if (!saved.id || saved.id === guild.ownerId) continue;
+      if (guild.client?.user && saved.id === guild.client.user.id) continue;
+      if (db && isProtectedUser(saved.id, guild, db)) continue;
+      try {
+        const member = await guild.members.fetch(saved.id).catch(() => null);
+        if (!member) continue;
+        const wanted = (saved.roles || [])
+          .map((id) => (db && db.roleMapping && db.roleMapping[id]) || id)
+          .filter((id) => guild.roles.cache.has(id) && !member.roles.cache.has(id));
+        if (wanted.length) {
+          await member.roles.add(wanted, 'استعادة تلقائية بعد تخريب').catch(() => {});
+          restored.members.push(`${member.user.username} (+${wanted.length} رتبة)`);
+        }
+      } catch (err) {
+        console.error(`[guard] restore member roles ${saved.id}:`, err.message);
+      }
+    }
+
+    // إعدادات السيرفر نفسه (الاسم / الوصف / مستوى التحقق ...)
+    if (backup.guild) {
+      const savedGuild = backup.guild;
+      try {
+        const patch = {};
+        if (guild.name !== savedGuild.name) patch.name = savedGuild.name;
+        if ((guild.description || '') !== (savedGuild.description || '')) {
+          patch.description = savedGuild.description || null;
+        }
+        if (savedGuild.verificationLevel !== undefined && guild.verificationLevel !== savedGuild.verificationLevel) {
+          patch.verificationLevel = savedGuild.verificationLevel;
+        }
+        if (
+          savedGuild.defaultMessageNotifications !== undefined &&
+          guild.defaultMessageNotifications !== savedGuild.defaultMessageNotifications
+        ) {
+          patch.defaultMessageNotifications = savedGuild.defaultMessageNotifications;
+        }
+        if (
+          savedGuild.explicitContentFilter !== undefined &&
+          guild.explicitContentFilter !== savedGuild.explicitContentFilter
+        ) {
+          patch.explicitContentFilter = savedGuild.explicitContentFilter;
+        }
+        if (Object.keys(patch).length) {
+          await guild.edit(patch, 'استعادة تلقائية بعد تخريب');
+          restored.guild.push('إعدادات السيرفر');
+        }
+        if (savedGuild.icon && guild.iconURL({ size: 512, dynamic: true }) !== savedGuild.icon) {
+          const response = await fetch(savedGuild.icon);
+          if (response.ok) {
+            await guild.setIcon(Buffer.from(await response.arrayBuffer()), 'استعادة تلقائية بعد تخريب');
+            restored.guild.push('الأيقونة');
+          }
+        }
+      } catch (err) {
+        console.error('[guard] restore guild settings:', err.message);
+      }
+    }
+
+    // الويب هوكس المحذوفة
+    for (const savedHook of backup.webhooks || []) {
+      try {
+        const channel = guild.channels.cache.get(savedHook.channelId);
+        if (!channel) continue;
+        const existing = await channel.webhooks.fetch().catch(() => null);
+        if (!existing) continue;
+        if (existing.some((w) => w.id === savedHook.id || w.name === savedHook.name)) continue;
+        let avatar = null;
+        if (savedHook.avatar) {
+          try {
+            avatar = Buffer.from(await (await fetch(savedHook.avatar)).arrayBuffer());
+          } catch { /* بدون صورة */ }
+        }
+        await channel.createWebhook(
+          { name: savedHook.name, avatar },
+          'استعادة تلقائية بعد تخريب'
+        ).catch(() => {});
+        restored.webhooks.push(`${savedHook.name} في ${channel.name}`);
+      } catch (err) {
+        console.error(`[guard] restore webhook ${savedHook.name}:`, err.message);
       }
     }
 
