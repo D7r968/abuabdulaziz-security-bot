@@ -1,93 +1,84 @@
-const { EmbedBuilder, AuditLogEvent } = require('discord.js');
+'use strict';
+
+const { AuditLogEvent } = require('discord.js');
 const config = require('../config.json');
+const guard = require('../guard');
 
 module.exports = {
-    name: 'guildMemberRemove',
-    async execute(member, client, db, saveDB) {
-        if (!config.protectionSettings.kickProtection) return;
+  name: 'guildMemberRemove',
+  async execute(member, client, db, saveDB) {
+    const ir = guard.settings();
+    if (ir.enabled === false) return;
+    if (!config.protectionSettings.kickProtection) return;
 
-        const guild = member.guild;
-        
-        await new Promise(resolve => setTimeout(resolve, 500));
-        
-        try {
-            const auditLogs = await guild.fetchAuditLogs({
-                type: AuditLogEvent.MemberKick,
-                limit: 1
-            });
+    const guild = member.guild;
+    if (!guild) return;
+    if (client.user && member.id === client.user.id) return;
 
-            const kickLog = auditLogs.entries.first();
-            
-            // التحقق إذا كان كيك
-            if (!kickLog || kickLog.target.id !== member.id) return;
-            if (Date.now() - kickLog.createdTimestamp > 5000) return;
+    await new Promise((resolve) => setTimeout(resolve, 400));
 
-            const { executor } = kickLog;
-            
-            if (client.isWhitelisted(executor.id)) {
-                console.log(`✅ ${executor.tag} كك ${member.user.tag} (في الوايت لست)`);
-                return;
-            }
+    const entry = await guard.auditExecutor(guild, AuditLogEvent.MemberKick, member.id, 20000);
+    if (!entry?.executor) return;
+    const executor = entry.executor;
 
-            console.log(`⚠️ ${executor.tag} كك ${member.user.tag} بدون صلاحيات!`);
+    if (client.user && executor.id === client.user.id) return;
+    if (guard.isProtectedUser(executor.id, guild, db)) return;
 
-            // حفظ معلومات العضو
-            const memberBackup = db.backup.members.find(m => m.id === member.id);
+    const windowMs = ir.massKickWindowMs || 60000;
+    const count = guard.hit(db, 'massKick', executor.id, windowMs);
+    const threshold = ir.massKickThreshold || 3;
+    const mode = count >= threshold ? 'ban' : 'kick';
 
-            // إرسال دعوة للعضو المكيك
-            try {
-                const channels = guild.channels.cache.filter(c => c.isTextBased() && c.permissionsFor(guild.members.me).has('CreateInstantInvite'));
-                const channel = channels.first();
-                
-                if (channel) {
-                    const invite = await channel.createInvite({
-                        maxAge: 300, // 5 دقائق
-                        maxUses: 1,
-                        unique: true,
-                        reason: 'استعادة عضو تم كيكه بدون صلاحيات'
-                    });
-
-                    // إرسال الدعوة للعضو
-                    await member.user.send({
-                        content: `🔄 **تم استرجاعك تلقائياً**\n\nتم كيكك من سيرفر **${guild.name}** بدون صلاحيات صحيحة.\n\n✅ نظام الحماية اكتشف المخالفة\n📨 استخدم هذه الدعوة للعودة: ${invite.url}\n\n⏰ الدعوة صالحة لمدة 5 دقائق فقط!`
-                    }).catch(() => console.log('لم يتمكن البوت من إرسال رسالة للعضو'));
-
-                    console.log(`📨 تم إرسال دعوة لـ ${member.user.tag}`);
-
-                    // حفظ معلومات لإعادة الرولات عند العودة
-                    if (memberBackup) {
-                        if (!db.pendingRestores) db.pendingRestores = {};
-                        db.pendingRestores[member.id] = {
-                            roles: memberBackup.roles,
-                            timestamp: Date.now()
-                        };
-                        saveDB();
-                    }
-                }
-            } catch (error) {
-                console.error('خطأ في إرسال الدعوة:', error);
-            }
-
-            // معاقبة المخالف
-            const executorMember = await guild.members.fetch(executor.id).catch(() => null);
-            if (executorMember) {
-                const memberRoles = executorMember.roles.cache.filter(r => r.id !== guild.id);
-                await executorMember.roles.remove(memberRoles).catch(console.error);
-                console.log(`🔨 تم إزالة جميع رتب ${executor.tag}`);
-            }
-
-            // إرسال لوق
-            const embed = new EmbedBuilder()
-                .setColor('#FF0000')
-                .setTitle('🚨 محاولة كيك غير مصرح!')
-                .setDescription(`**المخالف:** ${executor.tag} (${executor.id})\n**الضحية:** ${member.user.tag} (${member.id})\n**الإجراء:** تم إزالة جميع رتب المخالف`)
-                .setTimestamp()
-                .setFooter({ text: 'نظام الحماية الاحترافي' });
-
-            await client.sendLog(embed);
-
-        } catch (error) {
-            console.error('خطأ في حماية الكيك:', error);
-        }
+    // حفظ رولات المكيوك + دعوة يرجع فيها
+    const backup = guard.getBackup(guild, db);
+    const memberBackup = (backup.members || []).find((m) => m.id === member.id);
+    if (memberBackup) {
+      if (!db.pendingRestores) db.pendingRestores = {};
+      db.pendingRestores[member.id] = { roles: memberBackup.roles, timestamp: Date.now() };
     }
+
+    try {
+      const channel = guild.channels.cache.find(
+        (c) => c.isTextBased() && c.permissionsFor(guild.members.me)?.has('CreateInstantInvite')
+      );
+      if (channel) {
+        const invite = await channel.createInvite({
+          maxAge: 300,
+          maxUses: 1,
+          unique: true,
+          reason: 'استعادة عضو تم كيكه بدون صلاحيات'
+        });
+        await member.user
+          .send(`🔄 تم كيكك من **${guild.name}** بدون صلاحيات. رابط العودة (٥ دقائق): ${invite.url}`)
+          .catch(() => {});
+      }
+    } catch { /* تجاهل */ }
+
+    const restored = await guard.restoreAll(guild, db, saveDB);
+    const res = await guard.punish(
+      executor.id,
+      guild,
+      `${count} عملية كيك خلال ${windowMs / 1000} ثانية`,
+      mode,
+      db,
+      saveDB
+    );
+    guard.clearHits(db, 'massKick', executor.id);
+    if (typeof saveDB === 'function') saveDB();
+
+    console.log(
+      `⚠️ ${executor.tag} كيك ${member.user.tag} → ${res.banned ? 'BAN' : res.kicked ? 'KICK' : 'لا إجراء'} للمخالف`
+    );
+
+    await guard.alert(
+      client,
+      '🚨 كيك غير مصرح — إجراء فوري',
+      `**المخالف:** ${executor.tag} (${executor.id})\n` +
+        `**الضحية:** ${member.user.tag} (${member.id})\n` +
+        `**التكرار:** ${count} خلال ${windowMs / 1000} ثانية\n` +
+        `**الإجراء:** ${res.banned ? 'سحب الرتب + باي' : res.kicked ? 'سحب الرتب + كيك' : 'تعذر العقاب'}\n` +
+        `**تم الإرجاع:** ${restored.channels.length} قناة، ${restored.roles.length} رتبة`,
+      '#FF0000'
+    );
+  }
 };
