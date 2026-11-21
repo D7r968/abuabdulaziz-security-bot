@@ -11,6 +11,18 @@ const guard = require('../guard');
 // أوامر Script اللي بتتسجل عند الدخول
 const SLASH_COMMANDS = [
   new SlashCommandBuilder()
+    .setName('link')
+    .setDescription('ربط حساب ديسكوردك بلوحة التحكم')
+    .addStringOption((o) =>
+      o
+        .setName('code')
+        .setDescription('الكود اللي ظهر في الموقع')
+        .setMinLength(4)
+        .setMaxLength(16)
+        .setRequired(true)
+    )
+    .toJSON(),
+  new SlashCommandBuilder()
     .setName('protect')
     .setDescription('إدارة صلاحيات الحماية')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
@@ -30,12 +42,86 @@ const SLASH_COMMANDS = [
     .toJSON()
 ];
 
+async function handleLink(interaction, client) {
+  const isAdmin = !!interaction.member?.permissions?.has?.(PermissionFlagsBits.Administrator);
+  if (!isAdmin) {
+    return interaction.reply({
+      content: '❌ أمر الربط للأدمن فقط في هذا السيرفر.',
+      ephemeral: true
+    });
+  }
+
+  const code = interaction.options.getString('code', true).trim().toUpperCase();
+  const guilds = [];
+
+  for (const guild of client.guilds.cache.values()) {
+    let admin = guild.ownerId === interaction.user.id;
+    if (!admin) {
+      const member = await guild.members.fetch(interaction.user.id).catch(() => null);
+      admin = !!member && member.permissions.has(PermissionFlagsBits.Administrator);
+    }
+    if (!admin) continue;
+    guilds.push({
+      id: guild.id,
+      name: guild.name,
+      icon: guild.iconURL({ size: 128 }) || null,
+      owner: guild.ownerId === interaction.user.id,
+      botPresent: true,
+      memberCount: guild.memberCount
+    });
+  }
+
+  const base = String(process.env.DASHBOARD_URL || '').trim().replace(/\/+$/, '');
+  if (!base) {
+    return interaction.reply({ content: '❌ الموقع غير مربوط بالبوت.', ephemeral: true });
+  }
+
+  try {
+    const res = await fetch(`${base}/api/link/complete`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-log-token': String(process.env.DASHBOARD_LOG_TOKEN || '').trim()
+      },
+      body: JSON.stringify({
+        code,
+        userId: interaction.user.id,
+        username: interaction.user.globalName || interaction.user.username,
+        avatar: interaction.user.displayAvatarURL({ size: 128 }),
+        guilds
+      }),
+      signal: AbortSignal.timeout(10000)
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+
+    const lines = guilds.map((g) => `• **${g.name}** — \`${g.id}\``).join('\n') || 'لا يوجد';
+    return interaction.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setColor('#23A55A')
+          .setTitle('✅ تم ربط حسابك')
+          .setDescription(
+            `ارجع للموقع — صار عندك ${guilds.length} سيرفر تقدر تديره.\n\n${lines}\n\n` +
+              'السيرفرات اللي البوت موجود فيها تظهر بحدود خضراء.'
+          )
+          .setTimestamp()
+      ],
+      ephemeral: true
+    });
+  } catch (err) {
+    console.error('[link slash]', err.message);
+    return interaction.reply({ content: `❌ فشل الربط: ${err.message}`, ephemeral: true });
+  }
+}
+
 module.exports = {
   name: 'interactionCreate',
   slashCommands: SLASH_COMMANDS,
 
   async execute(interaction, client, db, saveDB) {
     if (!interaction.isChatInputCommand()) return;
+    if (interaction.commandName === 'link') return handleLink(interaction, client);
     if (interaction.commandName !== 'protect') return;
 
     const guild = interaction.guild;
