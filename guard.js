@@ -3,6 +3,9 @@
 const { EmbedBuilder, ChannelType, AuditLogEvent } = require('discord.js');
 const config = require('./config.json');
 
+let lastBackupError = '';
+function backupError() { return lastBackupError; }
+
 function settings() {
   return config.instantResponse || {};
 }
@@ -194,7 +197,11 @@ async function auditExecutor(guild, type, targetId, maxAgeMs = 20000) {
 // نسخة احتياطية لكل سيرفر على حدة
 // ─────────────────────────────────────────────
 async function backupNow(guild, db, saveDB) {
-  if (!guild || !db) return false;
+  lastBackupError = '';
+  if (!guild || !db) {
+    lastBackupError = 'no guild or database';
+    return false;
+  }
   try {
     const snapshot = {
       roles: guild.roles.cache
@@ -265,9 +272,17 @@ async function backupNow(guild, db, saveDB) {
     db.guildBackups[guild.id] = snapshot;
     if (!config.guildId || config.guildId === guild.id) db.backup = snapshot;
 
-    if (typeof saveDB === 'function') saveDB();
+    // فشل الحفظ على القرص ما يلغي النسخة الموجودة في الذاكرة — الاستضافة ترجّع القرص بعد كل إعادة نشر
+    if (typeof saveDB === 'function') {
+      try { saveDB(); }
+      catch (err) {
+        lastBackupError = 'saveDB: ' + err.message;
+        console.error('[guard] saveDB failed:', err.message);
+      }
+    }
     return true;
   } catch (err) {
+    lastBackupError = err.message;
     console.error('[guard] backupNow failed:', err.message);
     return false;
   }
@@ -578,6 +593,7 @@ module.exports = {
   punish,
   auditExecutor,
   backupNow,
+  backupError,
   restoreAll,
   hit,
   clearHits
