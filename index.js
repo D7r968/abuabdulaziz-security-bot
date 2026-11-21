@@ -209,7 +209,7 @@ const dashboardSync = require('./dashboard-sync');
 dashboardSync.start(
   'security',
   config,
-  ['ownerId', 'guildId', 'logChannelId', 'instantResponse', 'protectionSettings'],
+  ['ownerId', 'guildId', 'logChannelId', 'instantResponse', 'protectionSettings', 'backupEnabled', 'autoBackupInterval'],
   (remote) => {
     if (Array.isArray(remote.protectAllowed)) {
       db.protectAllowed = remote.protectAllowed.slice();
