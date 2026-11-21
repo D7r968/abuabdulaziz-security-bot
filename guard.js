@@ -22,9 +22,17 @@ function getTargetGuild(client) {
   return getTargetGuilds(client)[0] || null;
 }
 
+// الحفظ اختياري لكل سيرفر — أنت تفعّله من اللوحة، والافتراضي لا يحفظ أحد
+function isBackupEnabled(guild) {
+  if (!guild || !guild.id) return false;
+  const prefs = config.guildBackupPrefs || {};
+  return prefs[String(guild.id)] === true;
+}
+
 // ممنوع نسخة عامة مشتركة — كل سيرفر نسخته الخاصة فقط، وإلا ننسخ سيرفر قديم لسيرفر ثاني
 function getBackup(guild, db) {
   if (!guild || !db || !db.guildBackups) return {};
+  if (!isBackupEnabled(guild)) return {};
   const backup = db.guildBackups[guild.id];
   if (!backup || typeof backup !== 'object') return {};
   // تحقق إضافي: النسخة لازم تكون موسومة بنفس معرف السيرفر
@@ -210,6 +218,10 @@ async function backupNow(guild, db, saveDB) {
     lastBackupError = 'no guild or database';
     return false;
   }
+  if (!isBackupEnabled(guild)) {
+    lastBackupError = 'هذا السيرفر غير مفعّل للحفظ — فعّله من لوحة الحماية';
+    return false;
+  }
   try {
     let webhookList = [];
     try {
@@ -319,7 +331,8 @@ async function restoreAll(guild, db, saveDB) {
   // أي استرجاع لازم يبدأ من نسخة هذا السيرفر بالذات — ما في أي بديل عام
   const ownBackup = getBackup(guild, db);
   if (!ownBackup.roles && !ownBackup.channels && !ownBackup.emojis) {
-    console.log(`[guard] استرجاع ملغي: السيرفر ${guild.id} (${guild.name || ''}) ما عنده نسخة خاصة فيه — ما لمسنا أي شي`);
+    const why = isBackupEnabled(guild) ? 'ما عنده نسخة خاصة فيه' : 'الحفظ غير مفعّل له من اللوحة';
+    console.log(`[guard] استرجاع ملغي: السيرفر ${guild.id} (${guild.name || ''}) — ${why} — ما لمسنا أي شي`);
     return empty;
   }
   console.log(`[guard] استرجاع من نسخة السيرفر ${guild.id} (${guild.name || ''}) فقط`);
@@ -617,6 +630,7 @@ module.exports = {
   settings,
   getTargetGuilds,
   getTargetGuild,
+  isBackupEnabled,
   getBackup,
   isProtectedUser,
   syncProtectAllowed,
