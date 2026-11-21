@@ -54,6 +54,7 @@ module.exports = {
         if (user.id === client.user.id) {
           return interaction.reply({ content: '❌ ما أقدر أضيف نفسي.', ephemeral: true });
         }
+        await guard.grantProtectRole(guild, user.id);
         if (!db.protectAllowed.includes(user.id)) db.protectAllowed.push(user.id);
         if (typeof saveDB === 'function') saveDB();
 
@@ -72,6 +73,7 @@ module.exports = {
 
       if (sub === 'remove') {
         const user = interaction.options.getUser('user');
+        await guard.revokeProtectRole(guild, user.id);
         db.protectAllowed = db.protectAllowed.filter((id) => id !== user.id);
         if (typeof saveDB === 'function') saveDB();
 
