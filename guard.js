@@ -203,6 +203,14 @@ async function backupNow(guild, db, saveDB) {
     return false;
   }
   try {
+    let webhookList = [];
+    try {
+      if (guild.webhooks && typeof guild.webhooks.fetch === 'function') {
+        const fetched = await guild.webhooks.fetch().catch(() => null);
+        if (fetched && typeof fetched.values === 'function') webhookList = Array.from(fetched.values());
+      }
+    } catch { /* الويب هوكس مش إجبارية للنسخة */ }
+
     const snapshot = {
       roles: guild.roles.cache
         .filter((r) => r.id !== guild.id && !r.managed)
@@ -260,11 +268,11 @@ async function backupNow(guild, db, saveDB) {
         afkTimeout: guild.afkTimeout,
         afkChannelId: guild.afkChannelId || null
       },
-      webhooks: Array.from((await guild.webhooks.fetch().catch(() => ({ values: () => [] }))).values()).map((w) => ({
+      webhooks: webhookList.map((w) => ({
         id: w.id,
         name: w.name,
         channelId: w.channelId,
-        avatar: w.avatarURL({ size: 128 }) || null
+        avatar: typeof w.avatarURL === 'function' ? (w.avatarURL({ size: 128 }) || null) : null
       }))
     };
 
@@ -531,9 +539,13 @@ async function doRestore(guild, db, saveDB) {
       try {
         const channel = guild.channels.cache.get(savedHook.channelId);
         if (!channel) continue;
-        const existing = await channel.webhooks.fetch().catch(() => null);
-        if (!existing) continue;
-        if (existing.some((w) => w.id === savedHook.id || w.name === savedHook.name)) continue;
+        const hookManager = channel.webhooks;
+        const existing = hookManager && typeof hookManager.fetch === 'function'
+          ? await hookManager.fetch().catch(() => null)
+          : null;
+        if (existing && typeof existing.some === 'function') {
+          if (existing.some((w) => w.id === savedHook.id || w.name === savedHook.name)) continue;
+        }
         let avatar = null;
         if (savedHook.avatar) {
           try {
