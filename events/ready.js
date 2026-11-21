@@ -42,9 +42,10 @@ module.exports = {
       console.error(chalk.red('❌ فشل استرجاع الصلاحيات:'), err.message);
     }
 
-    // 📦 نسخة احتياطية فورية لكل سيرفر على حدة (بدون ما نستنى ساعة)
-    if (guilds.length && config.backupEnabled) {
-      for (const guild of guilds) {
+    // 📦 نسخة احتياطية فورية للسيرفرات اللي أنت فعّلتها فقط
+    const backupGuilds = guilds.filter((g) => guard.isBackupEnabled(g));
+    if (backupGuilds.length && config.backupEnabled) {
+      for (const guild of backupGuilds) {
         console.log(chalk.blue(`📦 جاري حفظ نسخة احتياطية من: ${guild.name}...`));
         const ok = await guard.backupNow(guild, db, saveDB);
         const snap = db.guildBackups[guild.id] || {};
@@ -56,7 +57,7 @@ module.exports = {
       }
       console.log('');
     } else {
-      console.log(chalk.yellow('⚠️ ما فيه سيرفر متاح للنسخ الاحتياطي — تأكد من إضافة البوت للسيرفر\n'));
+      console.log(chalk.yellow('⚠️ ما فيه سيرفر مفعّل للحفظ — فعّله من لوحة الحماية لكل سيرفر تبي يحفظ\n'));
     }
 
     // ⚡ تسجيل أوامر /protect (عالمي + داخل كل سيرفر للظهور فوراً)
