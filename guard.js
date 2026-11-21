@@ -22,9 +22,17 @@ function getTargetGuild(client) {
   return getTargetGuilds(client)[0] || null;
 }
 
+// ممنوع نسخة عامة مشتركة — كل سيرفر نسخته الخاصة فقط، وإلا ننسخ سيرفر قديم لسيرفر ثاني
 function getBackup(guild, db) {
-  if (!guild || !db) return {};
-  return (db.guildBackups && db.guildBackups[guild.id]) || db.backup || {};
+  if (!guild || !db || !db.guildBackups) return {};
+  const backup = db.guildBackups[guild.id];
+  if (!backup || typeof backup !== 'object') return {};
+  // تحقق إضافي: النسخة لازم تكون موسومة بنفس معرف السيرفر
+  if (backup.guildId && String(backup.guildId) !== String(guild.id)) {
+    console.error(`[guard] رفض نسخة غير مطابقة: guild=${guild.id} backup.guildId=${backup.guildId}`);
+    return {};
+  }
+  return backup;
 }
 
 // ─────────────────────────────────────────────
@@ -212,6 +220,8 @@ async function backupNow(guild, db, saveDB) {
     } catch { /* الويب هوكس مش إجبارية للنسخة */ }
 
     const snapshot = {
+      guildId: String(guild.id),
+      capturedAt: Date.now(),
       roles: guild.roles.cache
         .filter((r) => r.id !== guild.id && !r.managed)
         .map((r) => ({
@@ -278,7 +288,8 @@ async function backupNow(guild, db, saveDB) {
 
     if (!db.guildBackups) db.guildBackups = {};
     db.guildBackups[guild.id] = snapshot;
-    if (!config.guildId || config.guildId === guild.id) db.backup = snapshot;
+    // النسخة العامة القديمة كانت سبب النسخ بين السيرفرات — نمسحها نهائياً
+    if (db.backup) delete db.backup;
 
     // فشل الحفظ على القرص ما يلغي النسخة الموجودة في الذاكرة — الاستضافة ترجّع القرص بعد كل إعادة نشر
     if (typeof saveDB === 'function') {
@@ -302,7 +313,17 @@ async function backupNow(guild, db, saveDB) {
 const restoreQueues = new Map();
 
 async function restoreAll(guild, db, saveDB) {
-  if (!guild) return { roles: [], channels: [], emojis: [], members: [], webhooks: [], guild: [] };
+  const empty = { roles: [], channels: [], emojis: [], members: [], webhooks: [], guild: [] };
+  if (!guild) return empty;
+
+  // أي استرجاع لازم يبدأ من نسخة هذا السيرفر بالذات — ما في أي بديل عام
+  const ownBackup = getBackup(guild, db);
+  if (!ownBackup.roles && !ownBackup.channels && !ownBackup.emojis) {
+    console.log(`[guard] استرجاع ملغي: السيرفر ${guild.id} (${guild.name || ''}) ما عنده نسخة خاصة فيه — ما لمسنا أي شي`);
+    return empty;
+  }
+  console.log(`[guard] استرجاع من نسخة السيرفر ${guild.id} (${guild.name || ''}) فقط`);
+
   const key = guild.id;
   const previous = restoreQueues.get(key) || Promise.resolve();
   const next = previous.catch(() => {}).then(() => doRestore(guild, db, saveDB));
