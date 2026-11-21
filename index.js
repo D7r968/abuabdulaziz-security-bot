@@ -265,7 +265,8 @@ if (process.env.PORT) {
             roles: (snap.roles || []).length,
             channels: (snap.channels || []).length,
             members: (snap.members || []).length,
-            emojis: (snap.emojis || []).length
+            emojis: (snap.emojis || []).length,
+            ...(guard.backupError() ? { error: guard.backupError() } : {})
           });
         }
 
