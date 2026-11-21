@@ -1,0 +1,28 @@
+{
+  "token": "",
+  "prefix": "!",
+  "ownerId": "",
+  "guildId": "",
+  "logChannelId": "",
+  "botName": "Abuabdulaziz Security",
+  "embedColor": "#FF0000",
+  "antiRaid": {
+    "enabled": true,
+    "maxJoinsPerMinute": 5,
+    "punishmentType": "kick"
+  },
+  "protectionSettings": {
+    "roleProtection": true,
+    "channelProtection": true,
+    "memberProtection": true,
+    "messageProtection": true,
+    "emojiProtection": true,
+    "webhookProtection": true,
+    "banProtection": true,
+    "kickProtection": true
+  },
+  "whitelist": [],
+  "permanentRoles": [],
+  "backupEnabled": true,
+  "autoBackupInterval": 3600000
+}
