@@ -67,6 +67,11 @@ module.exports = {
         const event = require(path.join(__dirname, file));
         if (Array.isArray(event.slashCommands)) slash.push(...event.slashCommands);
       }
+      // أوامر الروم الصوتي
+      if (client.voice) slash.push(...client.voice.commands());
+
+      // استرجاع الروم المحفوظ
+      if (client.voice) await client.voice.restore();
 
       if (slash.length) {
         await client.application.commands.set(slash);
