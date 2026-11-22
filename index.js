@@ -4,6 +4,7 @@ const http = require('http');
 const config = require('./config.json');
 const guard = require('./guard');
 const chalk = require('chalk');
+const attachVoice = require('./voice');
 
 const client = new Client({
     intents: [
@@ -20,6 +21,13 @@ const client = new Client({
         GatewayIntentBits.MessageContent,
     ],
     partials: [Partials.Message, Partials.Channel, Partials.Reaction]
+});
+
+// أوامر الروم الصوتي (/join /leave /status) — نفس سلوك بوت الترحيب
+client.voice = attachVoice(client, {
+    ghRepo: 'abuabdulaziz-security-bot',
+    log: (...a) => console.log(...a),
+    warn: (...a) => console.warn(...a)
 });
 
 client.commands = new Collection();
