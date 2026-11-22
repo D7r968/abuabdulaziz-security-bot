@@ -24,7 +24,7 @@ const client = new Client({
 });
 
 // أوامر الروم الصوتي (/join /leave /status) — نفس سلوك بوت الترحيب
-client.voice = attachVoice(client, {
+client.voiceCmds = attachVoice(client, {
     ghRepo: 'abuabdulaziz-security-bot',
     log: (...a) => console.log(...a),
     warn: (...a) => console.warn(...a)
