@@ -151,7 +151,14 @@ module.exports = function attachVoice(client, opts = {}) {
         await interaction.reply({ content: '❌ أدخل روم صوتي أول أو حدّد قناة بالأمر، ثم جرّب /join', flags: 64 });
         return true;
       }
-      const ok = join(guild, channel, interaction.user.tag);
+      let ok = false;
+      try {
+        ok = join(guild, channel, interaction.user.tag);
+      } catch (err) {
+        warn('[voice] فشل الدخول للروم:', err.message);
+        await interaction.reply({ content: '❌ صار خطأ أثناء الدخول للروم: ' + err.message, flags: 64 });
+        return true;
+      }
       await interaction.reply({
         content: ok
           ? `✅ البوت صار جالس في <#${channel.id}> — بيبقى فيه طول ما البوت شغال، ويرجع لحاله لو انقطع.`
