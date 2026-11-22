@@ -122,7 +122,7 @@ module.exports = {
   async execute(interaction, client, db, saveDB) {
     if (!interaction.isChatInputCommand()) return;
     // أوامر الروم الصوتي (/join /leave /status)
-    if (client.voice && await client.voice.handle(interaction)) return;
+    if (client.voiceCmds && await client.voiceCmds.handle(interaction)) return;
     if (interaction.commandName === 'link') return handleLink(interaction, client);
     if (interaction.commandName !== 'protect') return;
 
