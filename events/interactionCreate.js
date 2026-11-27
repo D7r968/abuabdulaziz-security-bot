@@ -13,6 +13,7 @@ const SLASH_COMMANDS = [
   new SlashCommandBuilder()
     .setName('link')
     .setDescription('ربط حساب ديسكوردك بلوحة التحكم')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .addStringOption((o) =>
       o
         .setName('code')
@@ -121,6 +122,12 @@ module.exports = {
 
   async execute(interaction, client, db, saveDB) {
     if (!interaction.isChatInputCommand()) return;
+    // كل أوامر / مقتصرة على الأدمن (أي رتبة فيها صلاحية Administrator)
+    const allowed = interaction.member?.permissions?.has?.(PermissionFlagsBits.Administrator) ||
+      interaction.user.id === interaction.guild?.ownerId;
+    if (!allowed) {
+      return interaction.reply({ content: '❌ أوامر البوت للأدمن فقط.', ephemeral: true });
+    }
     // أوامر الروم الصوتي (/join /leave /status)
     if (client.voiceCmds && await client.voiceCmds.handle(interaction)) return;
     if (interaction.commandName === 'link') return handleLink(interaction, client);
